@@ -420,6 +420,19 @@
   }
 
   let sugTimer;
+  /** 下拉選單固定在視窗上（不被表格外框裁切）；下方空間不足時往上展開 */
+  function placeSug(box, input) {
+    const r = input.getBoundingClientRect(), gap = 4, margin = 12;
+    const below = window.innerHeight - r.bottom - gap - margin, above = r.top - gap - margin;
+    const up = below < 200 && above > below;
+    const h = Math.max(120, Math.min(280, up ? above : below));
+    box.style.maxHeight = h + 'px';
+    box.style.width = Math.max(r.width, 340) + 'px';
+    box.style.left = Math.max(margin, Math.min(r.left, window.innerWidth - Math.max(r.width, 340) - margin)) + 'px';
+    box.style.top = up ? Math.max(margin, r.top - gap - Math.min(h, box.scrollHeight)) + 'px' : (r.bottom + gap) + 'px';
+  }
+  window.addEventListener('scroll', e => { const b = document.getElementById('sug'); if (b && !b.hidden && e.target !== b) b.hidden = true; }, true);
+  window.addEventListener('resize', () => { const b = document.getElementById('sug'); if (b) b.hidden = true; });
   function suggest(input, idx) {
     clearTimeout(sugTimer);
     const box = document.getElementById('sug'); const k = input.value.trim();
@@ -438,10 +451,9 @@
       const hits = local.concat(remote).slice(0, 30);
       if (document.activeElement !== input) return;
       if (!hits.length) { box.hidden = true; return; }
-      const r = input.getBoundingClientRect(), pr = box.parentElement.getBoundingClientRect();
-      box.style.left = (r.left - pr.left) + 'px'; box.style.top = (r.bottom - pr.top + 4) + 'px';
       box.innerHTML = hits.map((h, j) => `<button type="button" data-h="${j}"><span>${esc(h.name)}<br><span class="sub num" style="font-size:11px">${esc(h.sku)} · ${esc(h.src)}</span></span><span class="num sub">${h.cost !== '' && h.cost != null ? '成本 ' + money(h.cost) : ''}</span></button>`).join('');
       box.hidden = false;
+      placeSug(box, input);
       box.onmousedown = e => {
         const b = e.target.closest('[data-h]'); if (!b) return; e.preventDefault();
         const h = hits[+b.dataset.h], it = S.draft.items[idx];

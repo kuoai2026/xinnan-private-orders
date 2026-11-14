@@ -430,15 +430,38 @@ function dailyReminderPush() {
   due.forEach(r => updateRow_(t, r._row, { 已推播: today }));
 }
 
+/**
+ * 推播到 LINE 員工群組。優先走 Cloudflare 中介（xinnan-line-relay，群組 ID 存在 Cloudflare）；
+ * 未設定中介時才直接呼叫 LINE。指令碼屬性：RELAY_ADMIN_TOKEN（必填）、RELAY_URL（選填）。
+ */
+const RELAY_DEFAULT_URL = 'https://xinnan-line-relay.174kuo.workers.dev';
 function pushLine_(text) {
   const props = PropertiesService.getScriptProperties();
+  const body = text.slice(0, 4900);
+  const relayToken = props.getProperty('RELAY_ADMIN_TOKEN');
+  if (relayToken) {
+    const url = (props.getProperty('RELAY_URL') || RELAY_DEFAULT_URL).replace(/\/$/, '') + '/push/test';
+    const res = UrlFetchApp.fetch(url, {
+      method: 'post', contentType: 'application/json', muteHttpExceptions: true,
+      headers: { Authorization: 'Bearer ' + relayToken },
+      payload: JSON.stringify({ text: body })
+    });
+    if (res.getResponseCode() !== 200) throw new Error('LINE 推播失敗（中介回應 ' + res.getResponseCode() + '）');
+    return;
+  }
   const token = props.getProperty('LINE_CHANNEL_TOKEN');
   const to = props.getProperty('LINE_GROUP_ID');
-  if (!token || !to) { console.log('未設定 LINE_CHANNEL_TOKEN / LINE_GROUP_ID，略過推播'); return; }
+  if (!token || !to) { console.log('未設定 RELAY_ADMIN_TOKEN 或 LINE_CHANNEL_TOKEN / LINE_GROUP_ID，略過推播'); return; }
   UrlFetchApp.fetch('https://api.line.me/v2/bot/message/push', {
     method: 'post', contentType: 'application/json', headers: { Authorization: 'Bearer ' + token },
-    payload: JSON.stringify({ to: to, messages: [{ type: 'text', text: text.slice(0, 4900) }] })
+    payload: JSON.stringify({ to: to, messages: [{ type: 'text', text: body }] })
   });
+}
+
+/** 手動執行：送一則測試訊息到目前設定的群組（不含客戶資料） */
+function testLinePush() {
+  pushLine_('【私下訂單系統】LINE 群組推播測試成功');
+  console.log('已送出測試訊息，請到 LINE 群組確認');
 }
 
 /** 機器人被加入群組時記下群組 ID；管理者確認後手動填入指令碼屬性 LINE_GROUP_ID */

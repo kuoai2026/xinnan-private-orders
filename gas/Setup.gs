@@ -81,3 +81,29 @@ function backfillMilkReminders() {
   });
   console.log('補建 ' + created.length + ' 筆');
 }
+
+/**
+ * 匯入成本報價表：讀取雲端硬碟「私下訂單系統/報價表/報價表.csv」→ 寫入「報價表」分頁。
+ * 已有「報價表」分頁時會先改名備份（報價表_備份_日期時間），不會直接覆蓋。
+ */
+function importPriceTable() {
+  const files = DriveApp.getFilesByName('報價表.csv');
+  if (!files.hasNext()) throw new Error('找不到 報價表.csv，請確認雲端硬碟已同步');
+  const file = files.next();
+  let text = file.getBlob().getDataAsString('UTF-8').replace(/^﻿/, '');
+  const data = Utilities.parseCsv(text);
+  const ss = SpreadsheetApp.getActive();
+  const old = ss.getSheetByName('報價表');
+  if (old) old.setName('報價表_備份_' + Utilities.formatDate(new Date(), TZ, 'yyyyMMdd_HHmm'));
+  const sh = ss.insertSheet('報價表');
+  const numCols = ['一箱罐數', '進價（整組）', '單位成本', '門市售價', '定價', '導外價(tina/kuo)', '導外價(星郡)', '兩箱含運價', '運費', '毛利', '毛利率'];
+  const head = data[0];
+  const rows = data.slice(1).map(r => r.map((v, i) => (numCols.indexOf(head[i]) >= 0 && v !== '' && !isNaN(Number(v))) ? Number(v) : v));
+  sh.getRange(1, 1, 1, head.length).setValues([head]).setFontWeight('bold');
+  sh.getRange(2, 1, rows.length, head.length).setNumberFormat('@').setValues(rows);
+  numCols.forEach(c => { const i = head.indexOf(c); if (i >= 0) sh.getRange(2, i + 1, rows.length, 1).setNumberFormat(c === '毛利率' ? '0.0%' : '#,##0.##'); });
+  sh.setFrozenRows(1); sh.setFrozenColumns(4);
+  const st = head.indexOf('狀態');
+  rows.forEach((r, i) => { if (r[st] && r[st] !== '完成') sh.getRange(i + 2, 1, 1, head.length).setBackground('#FDF3D6'); });
+  console.log('已匯入 ' + rows.length + ' 列（來源：' + file.getName() + '）');
+}

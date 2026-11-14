@@ -426,7 +426,7 @@
     if (k.length < 2) { box.hidden = true; return; }
     sugTimer = setTimeout(async () => {
       const local = [];
-      (S.data.priceTable || []).forEach(p => { if ((p.品名 + (p.品牌 || '') + (p.組合 || '')).includes(k)) local.push({ name: [p.品牌, p.品名, p.組合].filter(Boolean).join(' '), sku: p.對應蝦皮貨號 || '', cost: p.單位成本, price: p.門市售價, src: '報價表' }); });
+      (S.data.priceTable || []).forEach(p => { if ((p.品名 + (p.品牌 || '') + (p.組合 || '')).includes(k)) local.push({ name: pName(p), sku: p.對應蝦皮貨號 || '', cost: pCost(p), price: pPrice(p), src: '報價表' }); });
       (S.data.aliases || []).forEach(a => { const nm = a.常用名稱 || ''; if (nm.includes(k)) local.push({ name: nm, sku: a.商品貨號 || '', cost: '', price: '', src: '商品別名' }); });
       let remote = [];
       try {
@@ -581,6 +581,10 @@
     };
   }
 
+  // 報價表一列 = 一個可賣的組合：建單成本用整組進價（沒有才用單位成本），售價用門市售價（沒有才用定價）
+  function pName(p) { return [String(p.品名 || '').includes(p.品牌 || '\u0000') ? '' : p.品牌, p.品名, p.組合].filter(Boolean).join(' '); }
+  function pCost(p) { return p['進價（整組）'] !== '' && p['進價（整組）'] != null ? p['進價（整組）'] : p.單位成本; }
+  function pPrice(p) { return p.門市售價 !== '' && p.門市售價 != null ? p.門市售價 : p.定價; }
   /* ---------- 成本報價表 ---------- */
   function viewPrices() {
     const all = S.data.priceTable || [];
@@ -598,14 +602,14 @@
       <div class="pgrid">${list.map(p => `<button class="pcard ${S.sel === p.品項ID ? 'on' : ''}" data-p="${esc(p.品項ID)}">
         <div class="pimg">${p.圖片路徑 ? `<img src="${esc(p.圖片路徑)}" alt="${esc(p.品名)}" loading="lazy">` : '尚無商品圖'}</div>
         <span style="display:flex;flex-direction:column;gap:2px"><span class="sub" style="font-size:12px">${esc(p.品牌)}${p.組合 ? ' · ' + esc(p.組合) : ''}</span><b style="font-size:15px">${esc(p.品名)}${p.狀態 === '待確認' ? ' <span class="tag t-pay" style="font-size:11px">待確認</span>' : ''}</b></span>
-        <span class="kv" style="font-size:13px"><span>單位成本</span><b class="num">${money(p.單位成本)}</b></span>
-        <span class="kv" style="font-size:13px"><span>門市售價</span><b class="num">${money(p.門市售價)}</b></span></button>`).join('')}</div>`;
+        <span class="kv" style="font-size:13px"><span>進價</span><b class="num">${money(pCost(p))}</b></span>
+        <span class="kv" style="font-size:13px"><span>售價</span><b class="num">${money(pPrice(p))}</b></span></button>`).join('')}</div>`;
     $main().querySelector('.pills').onclick = e => { const b = e.target.closest('[data-b]'); if (b) { S.brand = b.dataset.b; viewPrices(); } };
     $main().querySelector('.pgrid').onclick = e => { const b = e.target.closest('[data-p]'); if (b) { S.sel = b.dataset.p; viewPrices(); } };
     const qi = document.getElementById('pq'); qi.oninput = () => { S.q = qi.value; const p = qi.selectionStart; viewPrices(); const x = document.getElementById('pq'); x.focus(); x.setSelectionRange(p, p); };
     const p = S.sel && all.find(x => x.品項ID === S.sel);
     if (!p) { $side().innerHTML = ''; return; }
-    const f = k => `<div class="kv"><span>${k}</span><b class="num">${p[k] === '' || p[k] == null ? '—' : (isFinite(n(p[k])) && /價|成本|運費|毛利$/.test(k) ? money(p[k]) : esc(p[k]))}</b></div>`;
+    const f = k => `<div class="kv"><span>${k}</span><b class="num">${p[k] === '' || p[k] == null ? '—' : (k === '毛利率' && isFinite(n(p[k])) ? (n(p[k]) * 100).toFixed(1) + '%' : isFinite(n(p[k])) && /價|成本|運費|毛利$/.test(k) ? money(p[k]) : esc(p[k]))}</b></div>`;
     $side().innerHTML = `
       <div style="display:flex;gap:16px;align-items:center"><div class="pimg" style="width:96px;flex:none">${p.圖片路徑 ? `<img src="${esc(p.圖片路徑)}" alt="">` : ''}</div>
         <div style="display:flex;flex-direction:column;gap:4px"><span class="sub">${esc(p.品牌)} · ${esc(p.分類 || '')}</span><span style="font-size:20px;font-weight:700">${esc(p.品名)}</span><span class="sub num">${esc(p.組合 || '')}${p.一箱罐數 ? ' · 一箱 ' + esc(p.一箱罐數) + ' 罐' : ''}</span></div></div>
@@ -616,7 +620,7 @@
     $side().onclick = e => {
       if (!e.target.closest('[data-act="use"]')) return;
       S.draft = S.draft || newDraft();
-      const it = blankItem(); Object.assign(it, { name: [p.品牌, p.品名, p.組合].filter(Boolean).join(' '), sku: p.對應蝦皮貨號 || '', price: n(p.門市售價), unitCost: n(p.單位成本), priceSource: '報價表標準價', costSource: '成本：報價表' });
+      const it = blankItem(); Object.assign(it, { name: pName(p), sku: p.對應蝦皮貨號 || '', price: n(pPrice(p)), unitCost: n(pCost(p)), priceSource: '報價表標準價', costSource: '成本：報價表' });
       const rule = milkRule(it.name); if (rule || /奶水/.test(p.分類 || '')) { it.cans = n(p.一箱罐數) || n(rule && rule.每箱罐數) || 24; it.autoCans = true; }
       if (S.draft.items.length === 1 && !S.draft.items[0].name) S.draft.items = [it]; else S.draft.items.push(it);
       go('create');

@@ -41,6 +41,7 @@ function setStaffPassword() {
   const NAME = '請填姓名';
   const ROLE = '管理者';   // 管理者 或 一般
   const PASSWORD = '請填密碼至少6碼';
+  if (/請填/.test(NAME + PASSWORD)) throw new Error('請改用試算表選單「私下訂單系統 → 建立／重設管理者帳號」，或先填好姓名與密碼');
   const t = readTable_('人員');
   if (!t.rows.some(r => r['姓名'] === NAME)) appendRow_('人員', { 姓名: NAME, 角色: ROLE, 啟用: true, 建立日期: today_() });
   setPassword_(NAME, PASSWORD);

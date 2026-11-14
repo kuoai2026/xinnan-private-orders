@@ -601,19 +601,22 @@
       $main().innerHTML = `<header class="head"><h1>成本報價表</h1></header><div class="card empty">報價表還沒建立。<br>任務 B 把「產品成本.xlsx」整理進資料庫的「報價表」分頁後，這裡就會顯示商品圖、成本與各級售價。</div>`;
       $side().innerHTML = ''; return;
     }
-    const brands = ['全部'].concat([...new Set(all.map(p => p.品牌).filter(Boolean))]);
+    // 依品牌分頁顯示，不一次列出全部；有輸入搜尋字時才跨品牌搜尋
+    const brands = [...new Set(all.map(p => p.品牌).filter(Boolean))];
+    if (!brands.includes(S.brand)) S.brand = brands[0];
+    const cnt = b => all.filter(p => p.品牌 === b).length;
     const q = S.q.trim();
-    const list = all.filter(p => (S.brand === '全部' || p.品牌 === S.brand) && (!q || [p.品名, p.品牌, p.組合, p.對應蝦皮貨號].join(' ').includes(q)));
+    const list = q ? all.filter(p => [p.品名, p.品牌, p.組合, p.對應蝦皮貨號].join(' ').includes(q)) : all.filter(p => p.品牌 === S.brand);
     $main().innerHTML = `
-      <header class="head"><div style="display:flex;flex-direction:column;gap:4px"><h1>成本報價表</h1><span class="sub">${brands.length - 1} 個品牌 · ${all.length} 個品項</span></div>
+      <header class="head"><div style="display:flex;flex-direction:column;gap:4px"><h1>成本報價表</h1><span class="sub">${q ? `搜尋「${esc(q)}」· 找到 ${list.length} 個品項` : `${esc(S.brand)} · ${list.length} 個品項（共 ${brands.length} 個品牌）`}</span></div>
         <label class="search">${svg('search', 16)}<input type="search" id="pq" placeholder="搜尋品名、蝦皮貨號" value="${esc(S.q)}" aria-label="搜尋報價表"></label></header>
-      <div class="pills" role="group" aria-label="品牌">${brands.map(b => `<button class="pill ${S.brand === b ? 'on' : ''}" data-b="${esc(b)}" aria-pressed="${S.brand === b}">${esc(b)}</button>`).join('')}</div>
+      <div class="pills" role="group" aria-label="品牌">${brands.map(b => `<button class="pill ${!q && S.brand === b ? 'on' : ''}" data-b="${esc(b)}" aria-pressed="${!q && S.brand === b}">${esc(b)} <span class="num" style="opacity:.6">${cnt(b)}</span></button>`).join('')}</div>
       <div class="pgrid">${list.map(p => `<button class="pcard ${S.sel === p.品項ID ? 'on' : ''}" data-p="${esc(p.品項ID)}">
         <div class="pimg">${pImg(p) ? `<img src="${pImg(p)}" alt="${esc(p.品名)}" loading="lazy">` : (p.圖片路徑 && !S.imgs ? '圖片載入中' : '尚無商品圖')}</div>
         <span style="display:flex;flex-direction:column;gap:2px"><span class="sub" style="font-size:12px">${esc(p.品牌)}${p.組合 ? ' · ' + esc(p.組合) : ''}</span><b style="font-size:15px">${esc(p.品名)}${p.狀態 === '待確認' ? ' <span class="tag t-pay" style="font-size:11px">待確認</span>' : ''}</b></span>
         <span class="kv" style="font-size:13px"><span>進價</span><b class="num">${money(pCost(p))}</b></span>
         <span class="kv" style="font-size:13px"><span>售價</span><b class="num">${money(pPrice(p))}</b></span></button>`).join('')}</div>`;
-    $main().querySelector('.pills').onclick = e => { const b = e.target.closest('[data-b]'); if (b) { S.brand = b.dataset.b; viewPrices(); } };
+    $main().querySelector('.pills').onclick = e => { const b = e.target.closest('[data-b]'); if (b) { S.brand = b.dataset.b; S.q = ''; S.sel = null; viewPrices(); } };
     $main().querySelector('.pgrid').onclick = e => { const b = e.target.closest('[data-p]'); if (b) { S.sel = b.dataset.p; viewPrices(); } };
     const qi = document.getElementById('pq'); qi.oninput = () => { S.q = qi.value; const p = qi.selectionStart; viewPrices(); const x = document.getElementById('pq'); x.focus(); x.setSelectionRange(p, p); };
     const p = S.sel && all.find(x => x.品項ID === S.sel);

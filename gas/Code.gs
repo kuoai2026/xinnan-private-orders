@@ -42,6 +42,7 @@ function doPost(e) {
       logout: () => { CacheService.getScriptCache().remove('s_' + body.token); return {}; },
       bootstrap: () => bootstrap_(user),
       searchProducts: () => searchProducts_(body.keyword),
+      productImages: () => productImages_(),
       createOrder: () => withLock_(() => createOrder_(body.order, user)),
       shipOrder: () => withLock_(() => shipOrder_(body.shipment, user)),
       markPaid: () => withLock_(() => markPaid_(body.payment, user)),
@@ -59,6 +60,31 @@ function doPost(e) {
   } catch (err) {
     return json_({ ok: false, error: String(err.message || err) });
   }
+}
+
+/* 商品圖：雲端硬碟「私下訂單系統/商品圖/網頁」內的 <品項ID>.webp，只給登入者（data URL，逐檔快取 6 小時） */
+function productImages_() {
+  const folderId = PropertiesService.getScriptProperties().getProperty('IMG_FOLDER_ID');
+  let folder = folderId ? DriveApp.getFolderById(folderId) : null;
+  if (!folder) {
+    const path = ['私下訂單系統', '商品圖', '網頁'];
+    let it = DriveApp.getFoldersByName(path[0]);
+    if (!it.hasNext()) return {};
+    folder = it.next();
+    for (let i = 1; i < path.length; i++) { it = folder.getFoldersByName(path[i]); if (!it.hasNext()) return {}; folder = it.next(); }
+    PropertiesService.getScriptProperties().setProperty('IMG_FOLDER_ID', folder.getId());
+  }
+  const cache = CacheService.getScriptCache(), out = {};
+  const files = folder.getFiles();
+  while (files.hasNext()) {
+    const f = files.next(), m = f.getName().match(/^(Q\d+)\.(webp|png|jpe?g)$/i);
+    if (!m) continue;
+    const key = 'img_' + f.getId() + '_' + f.getLastUpdated().getTime();
+    let url = cache.get(key);
+    if (!url) { const b = f.getBlob(); url = 'data:' + b.getContentType() + ';base64,' + Utilities.base64Encode(b.getBytes()); if (url.length < 95000) cache.put(key, url, 21600); }
+    out[m[1]] = url;
+  }
+  return out;
 }
 
 function json_(obj) {

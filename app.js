@@ -585,11 +585,18 @@
   function pName(p) { return [String(p.品名 || '').includes(p.品牌 || '\u0000') ? '' : p.品牌, p.品名, p.組合].filter(Boolean).join(' '); }
   function pCost(p) { return p['進價（整組）'] !== '' && p['進價（整組）'] != null ? p['進價（整組）'] : p.單位成本; }
   // 網頁用去背小圖：img/products/<品項ID>.webp（原始去背檔在雲端硬碟「商品圖/去背」）
-  function pImg(p) { return 'img/products/' + encodeURIComponent(p.品項ID) + '.webp'; }
+  // 商品圖不放在公開網站：登入後由後端從雲端硬碟「私下訂單系統/商品圖/網頁」讀出（<品項ID>.webp）
+  function pImg(p) { return (S.imgs && S.imgs[p.品項ID]) || ''; }
+  async function loadImgs() {
+    if (S.imgs || S.imgsLoading) return; S.imgsLoading = true;
+    try { S.imgs = await api('productImages'); } catch (e) { S.imgs = {}; }
+    S.imgsLoading = false; if (S.view === 'prices' || location.hash === '#prices') viewPrices();
+  }
   function pPrice(p) { return p.門市售價 !== '' && p.門市售價 != null ? p.門市售價 : p.定價; }
   /* ---------- 成本報價表 ---------- */
   function viewPrices() {
     const all = S.data.priceTable || [];
+    if (all.some(p => p.圖片路徑)) loadImgs();
     if (!all.length) {
       $main().innerHTML = `<header class="head"><h1>成本報價表</h1></header><div class="card empty">報價表還沒建立。<br>任務 B 把「產品成本.xlsx」整理進資料庫的「報價表」分頁後，這裡就會顯示商品圖、成本與各級售價。</div>`;
       $side().innerHTML = ''; return;
@@ -602,7 +609,7 @@
         <label class="search">${svg('search', 16)}<input type="search" id="pq" placeholder="搜尋品名、蝦皮貨號" value="${esc(S.q)}" aria-label="搜尋報價表"></label></header>
       <div class="pills" role="group" aria-label="品牌">${brands.map(b => `<button class="pill ${S.brand === b ? 'on' : ''}" data-b="${esc(b)}" aria-pressed="${S.brand === b}">${esc(b)}</button>`).join('')}</div>
       <div class="pgrid">${list.map(p => `<button class="pcard ${S.sel === p.品項ID ? 'on' : ''}" data-p="${esc(p.品項ID)}">
-        <div class="pimg">${p.圖片路徑 ? `<img src="${pImg(p)}" alt="${esc(p.品名)}" loading="lazy">` : '尚無商品圖'}</div>
+        <div class="pimg">${pImg(p) ? `<img src="${pImg(p)}" alt="${esc(p.品名)}" loading="lazy">` : (p.圖片路徑 && !S.imgs ? '圖片載入中' : '尚無商品圖')}</div>
         <span style="display:flex;flex-direction:column;gap:2px"><span class="sub" style="font-size:12px">${esc(p.品牌)}${p.組合 ? ' · ' + esc(p.組合) : ''}</span><b style="font-size:15px">${esc(p.品名)}${p.狀態 === '待確認' ? ' <span class="tag t-pay" style="font-size:11px">待確認</span>' : ''}</b></span>
         <span class="kv" style="font-size:13px"><span>進價</span><b class="num">${money(pCost(p))}</b></span>
         <span class="kv" style="font-size:13px"><span>售價</span><b class="num">${money(pPrice(p))}</b></span></button>`).join('')}</div>`;
@@ -613,7 +620,7 @@
     if (!p) { $side().innerHTML = ''; return; }
     const f = k => `<div class="kv"><span>${k}</span><b class="num">${p[k] === '' || p[k] == null ? '—' : (k === '毛利率' && isFinite(n(p[k])) ? (n(p[k]) * 100).toFixed(1) + '%' : isFinite(n(p[k])) && /價|成本|運費|毛利$/.test(k) ? money(p[k]) : esc(p[k]))}</b></div>`;
     $side().innerHTML = `
-      <div style="display:flex;gap:16px;align-items:center"><div class="pimg" style="width:96px;flex:none">${p.圖片路徑 ? `<img src="${pImg(p)}" alt="">` : ''}</div>
+      <div style="display:flex;gap:16px;align-items:center"><div class="pimg" style="width:96px;flex:none">${pImg(p) ? `<img src="${pImg(p)}" alt="">` : ''}</div>
         <div style="display:flex;flex-direction:column;gap:4px"><span class="sub">${esc(p.品牌)} · ${esc(p.分類 || '')}</span><span style="font-size:20px;font-weight:700">${esc(p.品名)}</span><span class="sub num">${esc(p.組合 || '')}${p.一箱罐數 ? ' · 一箱 ' + esc(p.一箱罐數) + ' 罐' : ''}</span></div></div>
       <div style="display:flex;flex-direction:column;gap:10px"><span class="sec-title">成本（內部，報價單不顯示）</span>${f('進價（整組）')}${f('單位成本')}</div>
       <div class="box"><span class="sec-title">售價</span>${f('門市售價')}${f('定價')}${f('導外價(tina/kuo)')}${f('導外價(星郡)')}${f('兩箱含運價')}${f('毛利率')}</div>

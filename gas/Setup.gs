@@ -107,3 +107,36 @@ function importPriceTable() {
   rows.forEach((r, i) => { if (r[st] && r[st] !== '完成') sh.getRange(i + 2, 1, 1, head.length).setBackground('#FDF3D6'); });
   console.log('已匯入 ' + rows.length + ' 列（來源：' + file.getName() + '）');
 }
+
+/* ---------- 試算表選單：不用改程式碼就能建立管理者 ---------- */
+function onOpen() {
+  SpreadsheetApp.getUi().createMenu('私下訂單系統')
+    .addItem('建立／重設管理者帳號', 'showAdminDialog')
+    .addToUi();
+}
+
+function showAdminDialog() {
+  const html = HtmlService.createHtmlOutput(
+    '<style>body{font-family:sans-serif;font-size:14px}label{display:block;margin:10px 0 4px}input{width:100%;padding:8px;box-sizing:border-box;font-size:14px}' +
+    'button{margin-top:16px;padding:10px 16px;background:#4B3F9E;color:#fff;border:0;border-radius:8px;font-size:14px;cursor:pointer}#m{margin-top:10px;color:#7D3A0E}</style>' +
+    '<label>姓名（登入時顯示的名字）</label><input id="n" autocomplete="off">' +
+    '<label>密碼（至少 6 碼）</label><input id="p" type="password" autocomplete="new-password">' +
+    '<label>再輸入一次密碼</label><input id="p2" type="password" autocomplete="new-password">' +
+    '<button id="b" onclick="go()">建立管理者</button><div id="m"></div>' +
+    '<script>function go(){var n=document.getElementById("n").value.trim(),p=document.getElementById("p").value,p2=document.getElementById("p2").value,m=document.getElementById("m");' +
+    'if(!n){m.textContent="請填姓名";return}if(p.length<6){m.textContent="密碼至少 6 碼";return}if(p!==p2){m.textContent="兩次密碼不一樣";return}' +
+    'document.getElementById("b").disabled=true;m.textContent="處理中…";' +
+    'google.script.run.withSuccessHandler(function(r){m.style.color="#1E5A35";m.textContent=r;setTimeout(function(){google.script.host.close()},1800)})' +
+    '.withFailureHandler(function(e){document.getElementById("b").disabled=false;m.textContent="失敗："+e.message}).createAdminFromDialog(n,p)}</script>'
+  ).setWidth(360).setHeight(330);
+  SpreadsheetApp.getUi().showModalDialog(html, '建立管理者帳號');
+}
+
+function createAdminFromDialog(name, password) {
+  name = String(name || '').trim();
+  if (!name || String(password || '').length < 6) throw new Error('姓名或密碼不符合規則');
+  const t = readTable_('人員');
+  if (!t.rows.some(r => r['姓名'] === name)) appendRow_('人員', { 姓名: name, 角色: '管理者', 啟用: true, 建立日期: today_() });
+  setPassword_(name, password);
+  return '已設定「' + name + '」為管理者，可以到網站登入了';
+}

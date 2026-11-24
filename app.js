@@ -27,6 +27,7 @@
     tag: '<path d="M3 12V4h8l10 10-8 8z"/><circle cx="7.5" cy="8.5" r="1.4"/>',
     users: '<circle cx="9" cy="8" r="3.2"/><path d="M3 20c.8-3.2 3.3-4.8 6-4.8s5.2 1.6 6 4.8"/><path d="M16 5.2a3 3 0 0 1 0 5.6M18 15.5c1.5.7 2.6 2.2 3 4.5"/>',
     out: '<path d="M14 4h5v16h-5M10 8l-4 4 4 4M6 12h10"/>',
+    book: '<path d="M6 3h12a1 1 0 0 1 1 1v16a1 1 0 0 1-1 1H6a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2z"/><circle cx="11.5" cy="10" r="2.6"/><path d="M7.5 17c.6-2 2.2-3 4-3s3.4 1 4 3"/>',
     search: '<circle cx="11" cy="11" r="7"/><path d="M20 20l-3.5-3.5"/>'
   };
   const svg = (k, s = 22) => `<svg width="${s}" height="${s}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${icon[k]}</svg>`;
@@ -157,7 +158,7 @@
     if (!S.data) { root.innerHTML = '<div class="empty">載入中…</div>'; load().then(render).catch(e => toast(e.message)); return; }
     const due = remindersDue().length;
     const links = [
-      ['create', 'plus', '建單'], ['orders', 'list', '訂單'], ['ship', 'truck', '出貨'],
+      ['create', 'plus', '建單'], ['orders', 'list', '訂單'], ['customers', 'book', '客戶名單'], ['ship', 'truck', '出貨'],
       ['reminders', 'bell', '奶水回購提醒', due], ['prices', 'tag', '成本報價表']
     ];
     if (S.user.role === '管理者') links.push(['staff', 'users', '人員管理']);
@@ -178,7 +179,7 @@
       if (a.dataset.act === 'logout') { api('logout').catch(() => {}); logoutLocal(); return; }
       go(a.dataset.go);
     };
-    ({ orders: viewOrders, create: viewCreate, ship: viewShip, reminders: viewReminders, prices: viewPrices, staff: viewStaff, account: viewAccount }[S.route] || viewOrders)();
+    ({ orders: viewOrders, customers: viewCustomers, create: viewCreate, ship: viewShip, reminders: viewReminders, prices: viewPrices, staff: viewStaff, account: viewAccount }[S.route] || viewOrders)();
   }
   const $main = () => document.getElementById('main');
   const $side = () => document.getElementById('side');
@@ -295,10 +296,11 @@
           <span class="sec-title">收件與寄送</span>
           <label class="switch"><span>收件人同訂購人</span><input type="checkbox" data-k="sameRecipient" ${d.sameRecipient ? 'checked' : ''}></label>
           ${d.sameRecipient ? '' : `<div class="grid2"><label class="field"><span>收件人</span><input data-k="recipient.name" value="${esc(d.recipient.name)}"></label><label class="field"><span>收件電話</span><input data-k="recipient.phone" value="${esc(d.recipient.phone)}"></label></div>`}
-          <label class="field"><span>寄送方式</span><select data-k="shippingMethod">${['7-11賣貨便', '全家好賣+', '全家店到店', '新竹物流', '宅配', '郵寄', '自取'].map(x => `<option ${d.shippingMethod === x ? 'selected' : ''}>${x}</option>`).join('')}</select></label>
+          <label class="field"><span>寄送方式</span><select data-k="shippingMethod">${shipOptions(d.shippingMethod)}</select></label>
           <label class="field"><span>地址／取件門市</span><input data-k="recipient.address" value="${esc(d.recipient.address)}"></label>
         </div>
       </div>
+      ${d.customer.id ? custHistoryCard(d.customer.id) : ''}
       <div class="list" style="padding:12px;position:relative">
         <table class="items"><thead><tr><th style="width:34%">品項</th><th>數量</th><th>單價</th><th>小計</th><th>成本/單位</th><th>奶水罐數</th><th>贈品</th><th></th></tr></thead>
         <tbody>${d.items.map((it, i) => `<tr>
@@ -401,6 +403,9 @@
       const b = e.target.closest('button'); if (!b) return;
       if (b.dataset.type) { d.type = b.dataset.type; viewCreate(); }
       if (b.dataset.cust) pickCustomer(b.dataset.cust);
+      if (b.dataset.addPast != null) { addPastItems([+b.dataset.addPast]); }
+      if (b.dataset.act === 'addAllPast') { addPastItems(null); }
+      if (b.dataset.useRcpt != null) { useRecipient(custRecipients(d.customer.id)[+b.dataset.useRcpt]); viewCreate(); }
       if (b.dataset.act === 'unlinkCust') { d.customer.id = ''; viewCreate(); }
       if (b.dataset.act === 'addItem') { d.items.push(blankItem()); rerender(`[data-i="${d.items.length - 1}"][data-f="name"]`); }
       if (b.dataset.del != null) { d.items.splice(+b.dataset.del, 1); if (!d.items.length) d.items.push(blankItem()); viewCreate(); }
@@ -416,7 +421,60 @@
     const d = S.draft, c = S.data.customers.find(x => x.客戶ID === id); if (!c) return;
     d.customer = { id: c.客戶ID, name: c.姓名, phone: c.電話, lineName: c.LINE名稱 || '' };
     const last = S.data.reminders.filter(r => r.客戶ID === c.客戶ID && n(r.每日罐數)).pop(); if (last) d.cansPerDay = n(last.每日罐數);
+    const rc = custRecipients(c.客戶ID)[0]; if (rc) useRecipient(rc);
     d.items.forEach(it => applyLastPrice(it)); viewCreate();
+  }
+  const SHIP_METHODS = ['7-11賣貨便', '全家好賣+', '全家店到店', '新竹物流', '宅配', '郵寄', '自取'];
+  function shipOptions(cur) { const l = SHIP_METHODS.slice(); if (cur && !l.includes(cur)) l.unshift(cur); return l.map(x => `<option ${cur === x ? 'selected' : ''}>${esc(x)}</option>`).join(''); }
+  const custOrders = id => S.data.orders.filter(o => o.客戶ID === id).sort((a, b) => String(b.訂單日期 + b.訂單編號).localeCompare(String(a.訂單日期 + a.訂單編號)));
+  /** 這位客人用過的寄件資料（新到舊、不重複） */
+  function custRecipients(id) {
+    const seen = {}, out = [];
+    custOrders(id).forEach(o => {
+      const r = { name: o.收件人 || o.客戶 || '', phone: o.收件電話 || o.客戶電話 || '', address: o['收件地址/門市'] || '', method: o.寄送方式 || '', date: o.訂單日期 };
+      const key = [r.name, r.phone, r.address, r.method].join('|'); if (!r.address && !r.method) return;
+      if (!seen[key]) { seen[key] = 1; out.push(r); }
+    });
+    return out;
+  }
+  function useRecipient(r) {
+    const d = S.draft; if (!r) return;
+    const same = (!r.name || r.name === d.customer.name) && (!r.phone || String(r.phone).replace(/\D/g, '') === String(d.customer.phone).replace(/\D/g, ''));
+    d.sameRecipient = same; d.recipient = { name: r.name, phone: r.phone, address: r.address };
+    if (r.method) d.shippingMethod = r.method;
+  }
+  /** 最近一次訂單的品項（同時列出近 5 張訂單常買的） */
+  function custPastItems(id) {
+    const os = custOrders(id); if (!os.length) return { last: null, items: [] };
+    const last = os[0];
+    const items = S.data.items.filter(i => i.訂單編號 === last.訂單編號);
+    return { last, items, others: os.slice(1, 5) };
+  }
+  function custHistoryCard(id) {
+    const d = S.draft, { last, items, others } = custPastItems(id), rcs = custRecipients(id);
+    if (!last) return '<div class="card sub">這位客人還沒有訂單紀錄</div>';
+    const inDraft = it => d.items.some(x => x.name && (x.name === it.商品名稱 || (it.商品貨號 && x.sku === it.商品貨號)));
+    return `<div class="card" style="display:flex;flex-direction:column;gap:10px">
+      <div style="display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap"><span class="sec-title">上次購買 <span class="sub" style="font-weight:400">${esc(last.訂單日期)} · ${esc(last.訂單編號)} · 共 ${money(last.訂單總額 || last.商品金額)}</span></span>
+        ${items.length ? '<button class="btn soft" data-act="addAllPast">＋ 全部加入這張單</button>' : ''}</div>
+      ${items.length ? `<div class="past">${items.map((it, j) => `<div class="past-row"><span><b>${esc(it.商品名稱)}</b>${it.規格 ? ` <span class="sub">${esc(it.規格)}</span>` : ''}${it.贈品 === '是' ? ' <span class="tag t-wait">贈品</span>' : ''}</span><span class="num sub">× ${esc(it.數量)}</span><span class="num">${money(it.單價)}</span>${inDraft(it) ? '<span class="sub">已加入</span>' : `<button class="btn soft sm" data-add-past="${j}">＋ 加入</button>`}</div>`).join('')}</div>` : '<span class="sub">這張訂單沒有明細資料</span>'}
+      ${others.length ? `<details><summary class="sub">更早的訂單（${others.length}）</summary>${others.map(o => `<div class="sub" style="padding:4px 0">${esc(o.訂單日期)} · ${esc(S.data.items.filter(i => i.訂單編號 === o.訂單編號).map(i => i.商品名稱 + '×' + i.數量).join('、') || '—')}</div>`).join('')}</details>` : ''}
+      ${rcs.length > 1 ? `<div style="display:flex;flex-direction:column;gap:6px"><span class="sub">已帶入最近一次的寄件資料；也可以改用以前的：</span><div style="display:flex;flex-wrap:wrap;gap:6px">${rcs.slice(0, 5).map((r, j) => `<button class="btn soft sm" data-use-rcpt="${j}" style="text-align:left">${esc(r.method)}｜${esc(r.name)}｜${esc(r.address || '—')}</button>`).join('')}</div></div>` : rcs.length ? '<span class="sub">已帶入最近一次的寄件資料，有變動請直接修改右邊欄位</span>' : ''}
+    </div>`;
+  }
+  function addPastItems(idxs) {
+    const d = S.draft, { items } = custPastItems(d.customer.id);
+    const pick = idxs ? idxs.map(i => items[i]) : items;
+    pick.forEach(src => {
+      if (!src || d.items.some(x => x.name && (x.name === src.商品名稱 || (src.商品貨號 && x.sku === src.商品貨號)))) return;
+      const it = blankItem(); const q = n(src.數量) || 1;
+      Object.assign(it, { sku: src.商品貨號 || '', name: src.商品名稱, qty: q, price: n(src.單價), priceSource: '上次購買', gift: src.贈品 === '是' });
+      if (src.成本 !== '' && src.成本 != null) { it.unitCost = Math.round(n(src.成本) / q * 100) / 100; it.costSource = '成本：上次訂單'; }
+      applyLastPrice(it);
+      const rule = milkRule(it.name); if (rule && !it.gift) { it.cans = q * n(rule.每箱罐數); it.autoCans = true; }
+      const blank = d.items.findIndex(x => !x.name); if (blank >= 0) d.items[blank] = it; else d.items.push(it);
+    });
+    viewCreate();
   }
   /** 客戶姓名／電話欄的下拉選單：比對姓名、LINE 名稱、電話數字 */
   function custSuggest(input) {
@@ -624,6 +682,70 @@
         await api('shipOrder', { shipment: { orderNo: o.訂單編號, carrier: fd.get('carrier'), trackingNo: tn, date: fd.get('date'), cod: /取貨付款|貨到付款/.test(o.付款方式) ? o.訂單總額 : 0 } });
         await load(); S.sel = null; toast('已出貨：' + o.訂單編號); viewShip();
       });
+    };
+  }
+
+  /* ---------- 客戶名單 ---------- */
+  function custStats() {
+    const st = {};
+    S.data.orders.forEach(o => {
+      const x = st[o.客戶ID] || (st[o.客戶ID] = { cnt: 0, total: 0, last: '' });
+      x.cnt++; x.total += n(o.訂單總額); if (String(o.訂單日期) > x.last) x.last = String(o.訂單日期);
+    });
+    return st;
+  }
+  function viewCustomers() {
+    S.custQ = S.custQ || ''; S.custSort = S.custSort || 'last'; S.custType = S.custType || '全部';
+    const st = custStats(), kq = norm(S.custQ), kd = S.custQ.replace(/\D/g, '');
+    const types = ['全部'].concat([...new Set(S.data.customers.map(c => c.類型).filter(Boolean))]);
+    let list = S.data.customers.filter(c => S.custType === '全部' || c.類型 === S.custType)
+      .filter(c => !kq || norm([c.姓名, c.LINE名稱, c.客戶ID].join(' ')).includes(kq) || (kd.length >= 3 && String(c.電話 || '').replace(/\D/g, '').includes(kd)));
+    const g = c => st[c.客戶ID] || { cnt: 0, total: 0, last: '' };
+    const sorts = { last: (a, b) => g(b).last.localeCompare(g(a).last), cnt: (a, b) => g(b).cnt - g(a).cnt, total: (a, b) => g(b).total - g(a).total, name: (a, b) => String(a.姓名).localeCompare(String(b.姓名), 'zh-Hant') };
+    list = list.sort(sorts[S.custSort]);
+    const shown = list.slice(0, 300);
+    $main().innerHTML = `
+      <header class="head"><div style="display:flex;flex-direction:column;gap:4px"><h1>客戶名單</h1><span class="sub">共 ${S.data.customers.length} 位客戶${list.length !== S.data.customers.length ? `，符合 ${list.length} 位` : ''}；點一下看寄件資料與購買紀錄</span></div>
+        <label class="search">${svg('search', 16)}<input type="search" id="cq" placeholder="搜尋姓名、電話、LINE 名稱" value="${esc(S.custQ)}" aria-label="搜尋客戶"></label></header>
+      <div style="display:flex;flex-wrap:wrap;gap:10px;justify-content:space-between">
+        <div class="pills" role="group" aria-label="客戶類型" id="ctype">${types.map(t => `<button class="pill ${S.custType === t ? 'on' : ''}" data-t="${esc(t)}">${esc(t)}</button>`).join('')}</div>
+        <div class="pills" role="group" aria-label="排序" id="csort">${[['last', '最近訂購'], ['cnt', '訂購次數'], ['total', '消費金額'], ['name', '姓名']].map(([k, l]) => `<button class="pill ${S.custSort === k ? 'on' : ''}" data-s="${k}">${l}</button>`).join('')}</div></div>
+      <div class="list">${shown.length ? shown.map(c => { const x = g(c);
+        return `<button class="row ${S.sel === c.客戶ID ? 'on' : ''}" data-c="${esc(c.客戶ID)}" style="grid-template-columns:1.3fr 1fr .8fr .9fr"><span class="who"><b>${esc(c.姓名)}${c.LINE名稱 && c.LINE名稱 !== c.姓名 ? ` <span class="sub" style="font-weight:400">LINE：${esc(c.LINE名稱)}</span>` : ''}</b><span class="meta num">${esc(c.電話 || '')} · ${esc(c.客戶ID)}${c.類型 ? ' · ' + esc(c.類型) : ''}</span></span>
+          <span class="sub">${x.last ? '最近 <span class="num">' + esc(x.last) + '</span>' : '尚無訂單'}</span><span class="num">${x.cnt} 次</span><span class="amt num" style="text-align:right">${money(x.total)}</span></button>`; }).join('') + (list.length > shown.length ? `<div class="empty">只顯示前 300 位，請用搜尋縮小範圍</div>` : '') : '<div class="empty">找不到符合的客戶</div>'}</div>`;
+    const qi = document.getElementById('cq'); qi.oninput = () => { S.custQ = qi.value; const p = qi.selectionStart; viewCustomers(); const n2 = document.getElementById('cq'); n2.focus(); try { n2.setSelectionRange(p, p); } catch (e) { } };
+    document.getElementById('ctype').onclick = e => { const b = e.target.closest('[data-t]'); if (b) { S.custType = b.dataset.t; viewCustomers(); } };
+    document.getElementById('csort').onclick = e => { const b = e.target.closest('[data-s]'); if (b) { S.custSort = b.dataset.s; viewCustomers(); } };
+    $main().querySelector('.list').onclick = e => { const b = e.target.closest('[data-c]'); if (b) { S.sel = b.dataset.c; viewCustomers(); } };
+    sideCustomer();
+  }
+  function sideCustomer() {
+    const c = S.sel && S.data.customers.find(x => x.客戶ID === S.sel);
+    if (!c) { $side().innerHTML = ''; return; }
+    const x = custStats()[c.客戶ID] || { cnt: 0, total: 0, last: '' }, os = custOrders(c.客戶ID), rcs = custRecipients(c.客戶ID);
+    const freq = {}; os.forEach(o => orderItems(o.訂單編號).forEach(i => { if (i.贈品 === '是') return; const f = freq[i.商品名稱] || (freq[i.商品名稱] = { q: 0, times: 0 }); f.q += n(i.數量); f.times++; }));
+    const top = Object.keys(freq).sort((a, b) => freq[b].times - freq[a].times || freq[b].q - freq[a].q).slice(0, 8);
+    const extra = Object.keys(c).filter(k => !/^(_row|客戶ID|姓名|電話|LINE名稱|類型|建立日期)$/.test(k) && c[k] !== '' && c[k] != null);
+    const tel = c.電話 && !/\*/.test(c.電話) ? `<a class="num" href="tel:${esc(String(c.電話).replace(/\D/g, ''))}">${esc(c.電話)}</a>` : `<span class="num">${esc(c.電話 || '')}</span>`;
+    $side().innerHTML = `
+      <div style="display:flex;justify-content:space-between;align-items:flex-start"><div style="display:flex;flex-direction:column;gap:4px"><span class="sub num">${esc(c.客戶ID)}${c.類型 ? ' · ' + esc(c.類型) : ''}${c.建立日期 ? ' · 建立 ' + esc(c.建立日期) : ''}</span><h2 style="margin:0">${esc(c.姓名)}</h2>${tel}${c.LINE名稱 ? `<span class="sub">LINE：${esc(c.LINE名稱)}</span>` : ''}</div>
+        <button class="close" data-act="close" aria-label="關閉">×</button></div>
+      <div class="box"><div class="kv"><span>訂購次數</span><b class="num">${x.cnt} 次</b></div><div class="kv"><span>累計金額</span><b class="num">${money(x.total)}</b></div><div class="kv"><span>最近訂購</span><span class="num">${esc(x.last || '—')}</span></div>
+        ${extra.map(k => `<div class="kv"><span>${esc(k)}</span><span>${esc(c[k])}</span></div>`).join('')}</div>
+      <div style="display:flex;flex-direction:column;gap:8px"><span class="sec-title">寄件資料</span>
+        ${rcs.length ? rcs.slice(0, 5).map((r, j) => `<div class="box" style="gap:2px"><b style="font-size:14px">${esc(r.method || '—')}${j === 0 ? ' <span class="tag t-ship">最近使用</span>' : ''}</b><span>${esc(r.name)} · <span class="num">${esc(r.phone)}</span></span><span class="sub">${esc(r.address || '—')}</span></div>`).join('') : '<span class="sub">尚無寄件紀錄</span>'}</div>
+      ${top.length ? `<div style="display:flex;flex-direction:column;gap:6px"><span class="sec-title">常買品項</span>${top.map(k => `<div class="kv"><span>${esc(k)}</span><span class="num sub">買過 ${freq[k].times} 次 · 共 ${freq[k].q}</span></div>`).join('')}</div>` : ''}
+      <div style="display:flex;flex-direction:column;gap:8px"><span class="sec-title">訂單紀錄</span>
+        ${os.length ? os.slice(0, 20).map(o => `<button class="kv linkrow" data-o="${esc(o.訂單編號)}" style="text-align:left"><span class="num">${esc(o.訂單日期)}</span><span style="flex:1;margin:0 10px">${orderItems(o.訂單編號).map(i => esc(i.商品名稱) + '×' + esc(i.數量)).join('、') || '—'}</span><span class="num">${money(o.訂單總額)}</span></button>`).join('') : '<span class="sub">尚無訂單</span>'}</div>
+      <div style="margin-top:auto"><button class="btn dark" style="width:100%" data-act="newOrder">用這位客戶建單</button></div>`;
+    $side().onclick = e => {
+      const b = e.target.closest('button'); if (!b) return;
+      if (b.dataset.act === 'close') { S.sel = null; viewCustomers(); }
+      if (b.dataset.o) go('orders', b.dataset.o);
+      if (b.dataset.act === 'newOrder') {
+        if (S.draft && (S.draft.customer.name || S.draft.items.some(i => i.name)) && !confirm('建單頁有尚未送出的草稿，要清掉並改用這位客戶嗎？')) return;
+        const id = c.客戶ID; S.draft = newDraft(); go('create'); pickCustomer(id);
+      }
     };
   }
 

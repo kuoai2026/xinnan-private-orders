@@ -122,3 +122,11 @@ button{cursor:pointer}
   .row{grid-template-columns:1fr 1fr}
   .grid2,.grid3{grid-template-columns:1fr}
 }
+
+.past{display:flex;flex-direction:column;gap:2px}
+.past-row{display:grid;grid-template-columns:1fr auto auto 86px;gap:12px;align-items:center;padding:6px 8px;border-radius:12px}
+.past-row:hover{background:#F8F7FC}
+.past-row .btn,.btn.sm{min-height:34px;padding:4px 12px;font-size:13px}
+details summary{cursor:pointer}
+.linkrow{border:0;background:none;width:100%;padding:6px 4px;border-radius:10px;cursor:pointer;font:inherit;color:inherit}
+.linkrow:hover{background:var(--tint)}

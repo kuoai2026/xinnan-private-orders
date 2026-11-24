@@ -46,7 +46,14 @@
       if (j.code === 'AUTH') { logoutLocal(); throw new Error(j.error); }
       throw new Error(j.error || '發生錯誤');
     }
+    if (j.boot) setData(j.boot);
     return j.data;
+  }
+  /** 寫入：請後端在同一次請求順便回傳最新資料（示範模式則重新讀取） */
+  async function write(action, payload) {
+    const before = S.data, r = await api(action, { ...payload, withBoot: true });
+    if (S.data === before) await load();
+    return r;
   }
 
   // 示範模式：在瀏覽器記憶體模擬後端
@@ -134,7 +141,21 @@
   }
   function logoutLocal() { S.token = ''; S.user = null; S.data = null; sessionStorage.clear(); renderLogin('請重新登入'); }
 
-  async function load() { S.data = await api('bootstrap'); }
+  function setData(d) {
+    S.data = d; S.searchIdx = null;
+    try { sessionStorage.setItem('boot', JSON.stringify(d)); } catch (e) { /* 空間不足就不暫存 */ }
+  }
+  async function load() { setData(await api('bootstrap')); }
+  /** 重新整理時先用這個分頁上次的資料顯示，背景再更新 */
+  function bootFromSession() { try { const b = sessionStorage.getItem('boot'); return b ? JSON.parse(b) : null; } catch (e) { return null; } }
+  function refreshInBackground() {
+    if (S.refreshing) return; S.refreshing = true;
+    load().then(() => {
+      S.refreshing = false;
+      const a = document.activeElement, typing = a && /INPUT|TEXTAREA|SELECT/.test(a.tagName);
+      if (!typing) render(); else if (S.route !== 'create') toast('資料已更新');
+    }).catch(e => { S.refreshing = false; toast(e.message); });
+  }
 
   /* ---------- 共用計算 ---------- */
   const orderItems = no => S.data.items.filter(i => i.訂單編號 === no);
@@ -155,7 +176,12 @@
 
   function render() {
     if (!S.user) return renderLogin();
-    if (!S.data) { root.innerHTML = '<div class="empty">載入中…</div>'; load().then(render).catch(e => toast(e.message)); return; }
+    if (!S.data) {
+      const cached = bootFromSession();
+      if (cached) { S.data = cached; refreshInBackground(); }
+      else { root.innerHTML = '<div class="empty">載入中…</div>'; load().then(render).catch(e => toast(e.message)); return; }
+    }
+    if (!S.prodIdx && !S.prodIdxLoading) setTimeout(() => loadProdIdx(), 300);
     const due = remindersDue().length;
     const links = [
       ['create', 'plus', '建單'], ['orders', 'list', '訂單'], ['customers', 'book', '客戶名單'], ['ship', 'truck', '出貨'],
@@ -254,7 +280,7 @@
       const b = e.target.closest('[data-act]'); if (!b) return;
       if (b.dataset.act === 'close') { S.sel = null; viewOrders(); }
       if (b.dataset.act === 'toShip') go('ship', o.訂單編號);
-      if (b.dataset.act === 'paid') run(b, async () => { await api('markPaid', { payment: { orderNo: o.訂單編號 } }); await load(); toast('已標記收款'); render(); });
+      if (b.dataset.act === 'paid') run(b, async () => { await write('markPaid', { payment: { orderNo: o.訂單編號 } }); toast('已標記收款'); render(); });
     };
   }
   function trackUrl(o) {
@@ -624,9 +650,9 @@
     const items = d.items.filter(i => i.name).map(i => ({ sku: i.sku, name: i.name, qty: n(i.qty), price: n(i.price), unitCost: i.unitCost === '' ? '' : n(i.unitCost), gift: !!i.gift, cans: n(i.cans), costSource: i.costSource.replace('成本：', '') }));
     const rec = d.sameRecipient ? { name: d.customer.name, phone: d.customer.phone, address: d.recipient.address } : d.recipient;
     const order = { type: d.type, source: d.source, date: d.date, customer: d.customer, recipient: rec, shippingMethod: d.shippingMethod, items, discount: n(d.discount), shipping: n(d.shipping), paymentMethod: d.paymentMethod, paid: d.paid, last5: d.last5, note: d.note, cansPerDay: n(d.cansPerDay) || 1 };
-    const r = await api('createOrder', { order });
+    const r = await write('createOrder', { order });
     if (d.makeQuote) openQuote(r.orderNo, order);
-    S.draft = null; await load(); toast('已建立訂單 ' + r.orderNo); go('orders', r.orderNo);
+    S.draft = null; toast('已建立訂單 ' + r.orderNo); go('orders', r.orderNo);
   }
 
   /* 客戶報價單：另開視窗，瀏覽器列印另存 PDF；不含成本與毛利 */
@@ -679,8 +705,8 @@
       const fd = new FormData(f), tn = String(fd.get('trackingNo')).trim();
       if (tn.replace(/\D/g, '') === '600047000519') { toast('這是郵局特約戶編號，請填掛號／託運單號'); return; }
       run(f.querySelector('[type="submit"]'), async () => {
-        await api('shipOrder', { shipment: { orderNo: o.訂單編號, carrier: fd.get('carrier'), trackingNo: tn, date: fd.get('date'), cod: /取貨付款|貨到付款/.test(o.付款方式) ? o.訂單總額 : 0 } });
-        await load(); S.sel = null; toast('已出貨：' + o.訂單編號); viewShip();
+        await write('shipOrder', { shipment: { orderNo: o.訂單編號, carrier: fd.get('carrier'), trackingNo: tn, date: fd.get('date'), cod: /取貨付款|貨到付款/.test(o.付款方式) ? o.訂單總額 : 0 } });
+        S.sel = null; toast('已出貨：' + o.訂單編號); viewShip();
       });
     };
   }
@@ -795,8 +821,8 @@
       const b = e.target.closest('button'); if (!b) return;
       const note = document.getElementById('rnote').value;
       if (b.dataset.act === 'close') { S.sel = null; viewReminders(); }
-      if (b.dataset.st) run(b, async () => { await api('updateReminder', { reminder: { id: r.提醒ID, status: b.dataset.st, note } }); await load(); toast('已更新'); viewReminders(); render(); });
-      if (b.dataset.act === 'perDay') run(b, async () => { await api('updateReminder', { reminder: { id: r.提醒ID, cansPerDay: document.getElementById('perDay').value, note } }); await load(); toast('已重新計算'); viewReminders(); });
+      if (b.dataset.st) run(b, async () => { await write('updateReminder', { reminder: { id: r.提醒ID, status: b.dataset.st, note } }); toast('已更新'); viewReminders(); render(); });
+      if (b.dataset.act === 'perDay') run(b, async () => { await write('updateReminder', { reminder: { id: r.提醒ID, cansPerDay: document.getElementById('perDay').value, note } }); toast('已重新計算'); viewReminders(); });
       if (b.dataset.act === 'reorder') {
         const c = S.data.customers.find(x => x.客戶ID === r.客戶ID) || { 客戶ID: r.客戶ID, 姓名: r.客戶, 電話: r.電話 };
         const lastItems = orderItems(r.訂單編號).filter(i => !i.贈品);

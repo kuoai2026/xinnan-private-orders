@@ -16,6 +16,7 @@ const SHEETS = {
 const SESSION_HOURS = 6;
 const REMIND_DAYS_BEFORE = 5;
 const TZ = 'Asia/Taipei';
+const WRITE_ACTIONS = ['createOrder', 'shipOrder', 'markPaid', 'updateReminder'];
 
 /* ---------------- 入口 ---------------- */
 
@@ -57,6 +58,8 @@ function doPost(e) {
     };
     if (!handlers[action]) return json_({ ok: false, error: '未知的操作：' + action });
     const data = handlers[action]();
+    // 寫入後順便回傳最新資料，前端不必再多發一次請求
+    if (body.withBoot && WRITE_ACTIONS.indexOf(action) >= 0) return json_({ ok: true, data: data, boot: bootstrap_(user) });
     return json_({ ok: true, data: data });
   } catch (err) {
     return json_({ ok: false, error: String(err.message || err) });
@@ -120,6 +123,7 @@ function appendRow_(name, obj) {
   const sh = sheet_(name);
   const headers = sh.getRange(1, 1, 1, sh.getLastColumn()).getValues()[0].map(h => String(h).trim());
   sh.appendRow(headers.map(h => (h in obj ? obj[h] : '')));
+  dropCache_(name);
 }
 
 function updateRow_(table, rowNum, patch) {
@@ -127,6 +131,38 @@ function updateRow_(table, rowNum, patch) {
     const col = table.headers.indexOf(k);
     if (col >= 0) table.sh.getRange(rowNum, col + 1).setValue(patch[k]);
   });
+  dropCache_(table.sh.getName());
+}
+
+/* ---------------- 讀取快取（加速）----------------
+ * 每個分頁的內容暫存 60 秒；網頁寫入時立即清掉該分頁的暫存，
+ * 有人直接在試算表手動修改時，最多 60 秒後網頁就會看到。
+ */
+const CACHE_SEC = 60;
+function cacheGetJson_(key) {
+  const c = CacheService.getScriptCache(), head = c.get(key);
+  if (!head) return null;
+  const n = Number(head); if (!n) return null;
+  const keys = []; for (let i = 0; i < n; i++) keys.push(key + '_' + i);
+  const parts = c.getAll(keys); let str = '';
+  for (let i = 0; i < n; i++) { if (parts[keys[i]] == null) return null; str += parts[keys[i]]; }
+  try { return JSON.parse(str); } catch (e) { return null; }
+}
+function cachePutJson_(key, value, sec) {
+  const str = JSON.stringify(value), size = 25000, obj = {};
+  const n = Math.ceil(str.length / size) || 1;
+  if (n > 80) return;
+  for (let i = 0; i < n; i++) obj[key + '_' + i] = str.slice(i * size, (i + 1) * size);
+  try { const c = CacheService.getScriptCache(); c.putAll(obj, sec); c.put(key, String(n), sec); } catch (e) { /* 快取失敗不影響功能 */ }
+}
+function dropCache_(name) { try { CacheService.getScriptCache().remove('t_' + name); } catch (e) { } }
+/** 給畫面用的讀取（有暫存）；寫入流程請直接用 readTable_ 拿最新資料 */
+function cachedRows_(name, optional) {
+  const key = 't_' + name, hit = cacheGetJson_(key);
+  if (hit) return hit;
+  const rows = optional && !SpreadsheetApp.getActive().getSheetByName(name) ? [] : readTable_(name).rows;
+  cachePutJson_(key, rows, CACHE_SEC);
+  return rows;
 }
 
 function fmtDate_(d) { return Utilities.formatDate(d, TZ, 'yyyy-MM-dd'); }
@@ -223,18 +259,14 @@ function changePassword_(user, oldPw, newPw) {
 /* ---------------- 讀取資料 ---------------- */
 
 function bootstrap_(user) {
-  const settings = readSettings_();
-  const orders = readTable_(SHEETS.orders).rows;
-  const items = readTable_(SHEETS.items).rows;
-  const customers = readTable_(SHEETS.customers).rows;
-  const quotes = readTable_(SHEETS.quotes).rows;
-  const shipments = readTable_(SHEETS.shipments).rows;
-  const payments = readTable_(SHEETS.payments).rows;
-  const reminders = optionalTable_(SHEETS.reminders);
-  const milk = optionalTable_(SHEETS.milk);
-  const priceTable = optionalTable_(SHEETS.priceTable);
-  const aliases = optionalTable_(SHEETS.aliases);
-  return { user, settings, orders, items, customers, quotes, shipments, payments, reminders, milk, priceTable, aliases, remindDaysBefore: REMIND_DAYS_BEFORE, today: today_() };
+  let settings = cacheGetJson_('t_' + SHEETS.settings);
+  if (!settings) { settings = readSettings_(); cachePutJson_('t_' + SHEETS.settings, settings, CACHE_SEC); }
+  const T = n => cachedRows_(n), O = n => cachedRows_(n, true);
+  return {
+    user, settings, orders: T(SHEETS.orders), items: T(SHEETS.items), customers: T(SHEETS.customers), quotes: T(SHEETS.quotes),
+    shipments: T(SHEETS.shipments), payments: T(SHEETS.payments), reminders: O(SHEETS.reminders), milk: O(SHEETS.milk),
+    priceTable: O(SHEETS.priceTable), aliases: O(SHEETS.aliases), remindDaysBefore: REMIND_DAYS_BEFORE, today: today_()
+  };
 }
 
 function optionalTable_(name) {
@@ -269,17 +301,15 @@ function searchProducts_(keyword) {
  * 快取 10 分鐘，避免每次都讀 4,000 多列。
  */
 function productIndex_() {
-  const cache = CacheService.getScriptCache();
-  const hit = cache.get('prodIdx');
-  if (hit) return JSON.parse(hit);
+  const hit = cacheGetJson_('prodIdx');
+  if (hit) return hit;
   const t = readTable_(SHEETS.products);
   const pick = re => t.headers.find(h => re.test(h)) || '';
   const kSku = t.headers.indexOf('商品貨號') >= 0 ? '商品貨號' : pick(/貨號|編號|SKU/i);
   const kName = pick(/商品名稱|品名|名稱/), kCost = pick(/成本/), kBrand = pick(/品牌|廠牌/), kSpec = pick(/規格|容量/);
   const out = t.rows.map(r => [r[kSku] || '', r[kName] || '', kCost ? r[kCost] : '', kBrand ? r[kBrand] : '', kSpec ? r[kSpec] : ''])
     .filter(x => x[0] || x[1]);
-  const json = JSON.stringify(out);
-  if (json.length < 95000) cache.put('prodIdx', json, 600);
+  cachePutJson_('prodIdx', out, 600);
   return out;
 }
 

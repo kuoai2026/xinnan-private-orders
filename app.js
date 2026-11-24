@@ -56,6 +56,7 @@
         if (action === 'listStaff') return ok(D.staff);
         if (action === 'login') { if (!p.password) throw new Error('請輸入密碼'); return ok({ token: 'demo', user: { name: p.name, role: p.name === '示範管理者' ? '管理者' : '一般' } }); }
         if (action === 'bootstrap') return ok({ user: S.user, settings: D.settings, orders: D.orders, items: D.items, customers: D.customers, quotes: D.quotes, shipments: D.shipments, payments: D.payments, reminders: D.reminders, milk: D.milk, priceTable: D.priceTable, aliases: D.aliases, remindDaysBefore: 5, today: todayStr() });
+        if (action === 'productIndex') return ok(D.products.map(x => [x.商品貨號, x.商品名稱, x.成本 != null ? x.成本 : (x.單位成本 || ''), x.品牌 || '', x.規格 || '']));
         if (action === 'searchProducts') { const k = p.keyword.toLowerCase(); return ok(D.products.filter(x => (x.商品名稱 + x.商品貨號).toLowerCase().includes(k))); }
         if (action === 'createOrder') {
           const o = p.order, ymd = (o.date || todayStr()).replace(/-/g, '');
@@ -274,9 +275,7 @@
 
   function viewCreate() {
     const d = S.draft || (S.draft = newDraft());
-    const custHits = d.customer.id ? [] : S.data.customers.filter(c => {
-      const k = (d.customer.phone || d.customer.name).replace(/\s/g, ''); return k.length >= 2 && (String(c.電話).replace(/\D/g, '').includes(k.replace(/\D/g, '') || '@@') || String(c.姓名).includes(k));
-    }).slice(0, 5);
+    loadProdIdx();
     const pastOrders = d.customer.id ? S.data.orders.filter(o => o.客戶ID === d.customer.id).length : 0;
     const set = S.data.settings;
     $main().innerHTML = `
@@ -286,9 +285,8 @@
         <div class="card" style="flex:1 1 300px;display:flex;flex-direction:column;gap:12px">
           <div style="display:flex;justify-content:space-between;align-items:center"><span class="sec-title">客戶</span>
             ${d.customer.id ? `<span class="tag t-ship">回購 · 第 ${pastOrders + 1} 次 · ${esc(d.customer.id)}</span> ` : (d.customer.name || d.customer.phone ? '<span class="tag t-wait">新客</span>' : '')}</div>
-          <div class="grid2"><label class="field"><span>姓名</span><input data-k="customer.name" value="${esc(d.customer.name)}"></label>
-            <label class="field"><span>電話</span><input data-k="customer.phone" inputmode="tel" value="${esc(d.customer.phone)}"></label></div>
-          ${custHits.length ? `<div style="display:flex;flex-direction:column;gap:4px"><span class="sub">找到相符的舊客戶：</span>${custHits.map(c => `<button class="btn soft" style="justify-content:flex-start;text-align:left" data-cust="${esc(c.客戶ID)}">${esc(c.姓名)} · <span class="num">${esc(c.電話)}</span> · ${esc(c.客戶ID)}</button>`).join('')}</div>` : ''}
+          <div class="grid2"><label class="field"><span>姓名</span><input data-k="customer.name" value="${esc(d.customer.name)}" placeholder="輸入姓名、電話或 LINE 名稱找舊客戶" autocomplete="off"></label>
+            <label class="field"><span>電話</span><input data-k="customer.phone" inputmode="tel" value="${esc(d.customer.phone)}" autocomplete="off"></label></div>
           ${d.customer.id ? '<button class="btn" style="min-height:40px" data-act="unlinkCust">改為新客戶</button>' : ''}
           <div class="grid2"><label class="field"><span>來源</span><select data-k="source">${(set.來源 || ['LINE 官方帳號', 'LINE 私訊', '電話', '批發／機構']).map(x => `<option ${d.source === x ? 'selected' : ''}>${esc(x)}</option>`).join('')}</select></label>
             <label class="field"><span>訂單日期</span><input type="date" data-k="date" value="${esc(d.date)}"></label></div>
@@ -374,6 +372,12 @@
       if (el.dataset.k) {
         const v = el.type === 'checkbox' ? el.checked : el.value; setPath(d, el.dataset.k, v);
         if (el.dataset.k === 'customer.name' || el.dataset.k === 'customer.phone') { if (d.customer.id && e.type === 'input') { /* 已綁定舊客戶時只改顯示 */ } }
+        if (e.type === 'input' && (el.dataset.k === 'customer.name' || el.dataset.k === 'customer.phone')) {
+          // 打字時不重畫整頁（避免注音輸入被打斷），只更新新客標籤、右側預覽與下拉選單
+          const tag = el.closest('.card').querySelector('.tag.t-wait, .tag.t-ship');
+          if (!d.customer.id) { const has = d.customer.name || d.customer.phone; if (tag && !has) tag.remove(); else if (!tag && has) el.closest('.card').querySelector('.sec-title').insertAdjacentHTML('afterend', '<span class="tag t-wait">新客</span>'); }
+          sideCreate(); custSuggest(el); return;
+        }
         if (el.type === 'checkbox' || el.tagName === 'SELECT' || e.type === 'input') rerender();
       } else if (el.dataset.f) {
         const it = d.items[+el.dataset.i], f = el.dataset.f;
@@ -396,12 +400,7 @@
     main.onclick = e => {
       const b = e.target.closest('button'); if (!b) return;
       if (b.dataset.type) { d.type = b.dataset.type; viewCreate(); }
-      if (b.dataset.cust) {
-        const c = S.data.customers.find(x => x.客戶ID === b.dataset.cust);
-        d.customer = { id: c.客戶ID, name: c.姓名, phone: c.電話, lineName: c.LINE名稱 || '' };
-        const last = S.data.reminders.filter(r => r.客戶ID === c.客戶ID && n(r.每日罐數)).pop(); if (last) d.cansPerDay = n(last.每日罐數);
-        d.items.forEach(it => applyLastPrice(it)); viewCreate();
-      }
+      if (b.dataset.cust) pickCustomer(b.dataset.cust);
       if (b.dataset.act === 'unlinkCust') { d.customer.id = ''; viewCreate(); }
       if (b.dataset.act === 'addItem') { d.items.push(blankItem()); rerender(`[data-i="${d.items.length - 1}"][data-f="name"]`); }
       if (b.dataset.del != null) { d.items.splice(+b.dataset.del, 1); if (!d.items.length) d.items.push(blankItem()); viewCreate(); }
@@ -411,6 +410,45 @@
       if (b.dataset.act === 'reset') { if (confirm('確定清空這張草稿？')) { S.draft = null; viewCreate(); } }
       if (b.dataset.act === 'submit') run(b, submitOrder);
     };
+  }
+
+  function pickCustomer(id) {
+    const d = S.draft, c = S.data.customers.find(x => x.客戶ID === id); if (!c) return;
+    d.customer = { id: c.客戶ID, name: c.姓名, phone: c.電話, lineName: c.LINE名稱 || '' };
+    const last = S.data.reminders.filter(r => r.客戶ID === c.客戶ID && n(r.每日罐數)).pop(); if (last) d.cansPerDay = n(last.每日罐數);
+    d.items.forEach(it => applyLastPrice(it)); viewCreate();
+  }
+  /** 客戶姓名／電話欄的下拉選單：比對姓名、LINE 名稱、電話數字 */
+  function custSuggest(input) {
+    const box = document.getElementById('sug'), d = S.draft;
+    const k = input.value.trim();
+    if (!k || d.customer.id) { box.hidden = true; return; }
+    const kn = norm(k), kd = k.replace(/\D/g, '');
+    const stats = {}; S.data.orders.forEach(o => { const s0 = stats[o.客戶ID] || (stats[o.客戶ID] = { cnt: 0, last: '' }); s0.cnt++; if (String(o.訂單日期) > s0.last) s0.last = String(o.訂單日期); });
+    const hits = S.data.customers.map(c => {
+      const nm = norm(c.姓名), ln = norm(c.LINE名稱), ph = String(c.電話 || '').replace(/\D/g, '');
+      let sc = -1;
+      if (nm.startsWith(kn) || ln.startsWith(kn)) sc = 0; else if (nm.includes(kn) || ln.includes(kn)) sc = 1;
+      else if (kd.length >= 3 && ph.includes(kd)) sc = ph.endsWith(kd) || ph.startsWith(kd) ? 0 : 1;
+      return [sc, c];
+    }).filter(x => x[0] >= 0)
+      .sort((a, b) => a[0] - b[0] || ((stats[b[1].客戶ID] || {}).last || '').localeCompare((stats[a[1].客戶ID] || {}).last || ''))
+      .slice(0, 30).map(x => x[1]);
+    if (!hits.length) { box.innerHTML = `<div class="sug-note">沒有相符的舊客戶，建單時會建立為新客戶</div>`; box.hidden = false; placeSug(box, input); input.onblur = () => setTimeout(() => { box.hidden = true; }, 150); return; }
+    box.innerHTML = hits.map((c, j) => { const st = stats[c.客戶ID] || { cnt: 0, last: '' };
+      return `<button type="button" data-h="${j}" class="${j === 0 ? 'on' : ''}"><span class="sug-l"><b>${hilite(c.姓名, k)}${c.LINE名稱 && c.LINE名稱 !== c.姓名 ? ` <span class="sub">（LINE：${hilite(c.LINE名稱, k)}）</span>` : ''}</b><span class="sub num">${hilite(c.電話, kd.length >= 3 ? kd : k)} · ${esc(c.客戶ID)}${c.類型 ? ' · ' + esc(c.類型) : ''}</span></span><span class="sug-r"><span>${st.cnt ? '訂過 ' + st.cnt + ' 次' : '尚無訂單'}</span>${st.last ? `<span class="sub">最近 ${esc(st.last)}</span>` : ''}</span></button>`; }).join('');
+    box.hidden = false; placeSug(box, input);
+    let cur = 0;
+    const mark = j => { const bs = box.querySelectorAll('[data-h]'); bs.forEach(x => x.classList.remove('on')); cur = (j + bs.length) % bs.length; bs[cur].classList.add('on'); bs[cur].scrollIntoView({ block: 'nearest' }); };
+    box.onmousedown = e => { const b = e.target.closest('[data-h]'); if (!b) return; e.preventDefault(); box.hidden = true; pickCustomer(hits[+b.dataset.h].客戶ID); };
+    input.onkeydown = e => {
+      if (box.hidden) return;
+      if (e.key === 'ArrowDown') { e.preventDefault(); mark(cur + 1); }
+      else if (e.key === 'ArrowUp') { e.preventDefault(); mark(cur - 1); }
+      else if (e.key === 'Enter' && !e.isComposing) { e.preventDefault(); box.hidden = true; pickCustomer(hits[cur].客戶ID); }
+      else if (e.key === 'Escape') { box.hidden = true; }
+    };
+    input.onblur = () => setTimeout(() => { box.hidden = true; }, 150);
   }
 
   function applyLastPrice(it) {
@@ -425,46 +463,101 @@
     const r = input.getBoundingClientRect(), gap = 4, margin = 12;
     const below = window.innerHeight - r.bottom - gap - margin, above = r.top - gap - margin;
     const up = below < 200 && above > below;
-    const h = Math.max(120, Math.min(280, up ? above : below));
+    const h = Math.max(140, Math.min(360, up ? above : below));
     box.style.maxHeight = h + 'px';
-    box.style.width = Math.max(r.width, 340) + 'px';
-    box.style.left = Math.max(margin, Math.min(r.left, window.innerWidth - Math.max(r.width, 340) - margin)) + 'px';
+    box.style.width = Math.max(r.width, 420) + 'px';
+    box.style.left = Math.max(margin, Math.min(r.left, window.innerWidth - Math.max(r.width, 420) - margin)) + 'px';
     box.style.top = up ? Math.max(margin, r.top - gap - Math.min(h, box.scrollHeight)) + 'px' : (r.bottom + gap) + 'px';
   }
   window.addEventListener('scroll', e => { const b = document.getElementById('sug'); if (b && !b.hidden && e.target !== b) b.hidden = true; }, true);
   window.addEventListener('resize', () => { const b = document.getElementById('sug'); if (b) b.hidden = true; });
+  /* ---------- 品項搜尋：報價表＋商品別名＋商品主檔，全部在瀏覽器即時比對 ---------- */
+  // 全形轉半形、轉小寫、去空白與符號，讓「金補體 100」「金補體素(鉻100)」都比得到
+  const norm = v => String(v == null ? '' : v).replace(/[！-～]/g, c => String.fromCharCode(c.charCodeAt(0) - 0xfee0))
+    .toLowerCase().replace(/[\s　()（）\[\]【】「」.,，。、\-_/+*:：;；'"·]/g, '');
+  async function loadProdIdx() {
+    if (S.prodIdx || S.prodIdxLoading) return S.prodIdxLoading;
+    S.prodIdxLoading = (async () => {
+      let rows = [];
+      try { rows = await api('productIndex'); }
+      catch (e) { try { rows = (await api('searchProducts', { keyword: '' })) || []; } catch (e2) { rows = []; } }
+      S.prodIdx = rows.map(r => Array.isArray(r) ? r : [r.商品貨號 || '', r.商品名稱 || r.品名 || '', r.成本 || '', r.品牌 || '', r.規格 || '']);
+      S.prodIdxLoading = null; S.searchIdx = null;
+    })();
+    return S.prodIdxLoading;
+  }
+  function buildSearchIdx() {
+    if (S.searchIdx && S.searchIdx.v === S.data) return S.searchIdx.list;
+    const list = [], bySku = {};
+    const add = (h, rank) => {
+      const key = (h.sku ? 'S' + h.sku : 'N' + norm(h.name)) + '|' + norm(h.name);
+      const old = bySku[key];
+      if (old) { if (old.cost === '' && h.cost !== '') old.cost = h.cost; if (!old.price && h.price) old.price = h.price; if (h.alias) old.text += ' ' + norm(h.alias); return; }
+      h.rank = rank; h.text = norm([h.name, h.sku, h.brand, h.spec, h.alias].join(' ')); h.nn = norm(h.name);
+      bySku[key] = h; list.push(h);
+    };
+    (S.data.priceTable || []).forEach(p => add({ name: pName(p), sku: p.對應蝦皮貨號 || '', cost: pCost(p), price: pPrice(p), brand: p.品牌 || '', spec: p.組合 || '', src: '報價表' }, 0));
+    const master = {}; (S.prodIdx || []).forEach(r => { master[r[0]] = r; });
+    (S.data.aliases || []).forEach(a => {
+      const m = master[a.商品貨號] || [];
+      add({ name: a.常用名稱 || m[1] || '', alias: m[1] || '', sku: a.商品貨號 || '', cost: m[2] != null ? m[2] : '', price: '', brand: m[3] || '', spec: '', src: '常用名稱' }, 1);
+    });
+    (S.prodIdx || []).forEach(r => add({ name: r[1] || r[0], sku: r[0], cost: r[2] == null ? '' : r[2], price: '', brand: r[3] || '', spec: r[4] || '', src: '商品主檔' }, 2));
+    S.searchIdx = { v: S.data, list };
+    return list;
+  }
+  function searchItems(k) {
+    const words = k.split(/\s+/).map(norm).filter(Boolean); if (!words.length) return [];
+    const whole = norm(k), out = [];
+    for (const h of buildSearchIdx()) {
+      if (!words.every(w => h.text.includes(w))) continue;
+      const score = h.rank * 10 + (h.nn.startsWith(whole) ? 0 : h.nn.includes(whole) ? 2 : 4) + Math.min(h.nn.length, 60) / 100;
+      out.push([score, h]);
+    }
+    return out.sort((x, y) => x[0] - y[0]).slice(0, 50).map(x => x[1]);
+  }
+  function hilite(text, k) {
+    const t = String(text || ''); const ws = k.split(/\s+/).filter(Boolean).sort((a, b) => b.length - a.length);
+    if (!ws.length) return esc(t);
+    const re = new RegExp('(' + ws.map(w => w.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('|') + ')', 'gi');
+    return t.split(re).map((part, i) => i % 2 ? '<mark>' + esc(part) + '</mark>' : esc(part)).join('');
+  }
   function suggest(input, idx) {
     clearTimeout(sugTimer);
     const box = document.getElementById('sug'); const k = input.value.trim();
-    if (k.length < 2) { box.hidden = true; return; }
-    sugTimer = setTimeout(async () => {
-      const local = [];
-      (S.data.priceTable || []).forEach(p => { if ((p.品名 + (p.品牌 || '') + (p.組合 || '')).includes(k)) local.push({ name: pName(p), sku: p.對應蝦皮貨號 || '', cost: pCost(p), price: pPrice(p), src: '報價表' }); });
-      (S.data.aliases || []).forEach(a => { const nm = a.常用名稱 || ''; if (nm.includes(k)) local.push({ name: nm, sku: a.商品貨號 || '', cost: '', price: '', src: '商品別名' }); });
-      let remote = [];
-      try {
-        remote = (await api('searchProducts', { keyword: k })).map(p => {
-          const nk = pickKey(p, /商品名稱|品名|名稱/), ck = pickKey(p, /成本/);
-          return { name: nk ? p[nk] : p.商品貨號, sku: p.商品貨號 || '', cost: ck ? p[ck] : '', price: '', src: '商品主檔' };
-        });
-      } catch (e) { /* 查詢失敗時只顯示本地 */ }
-      const hits = local.concat(remote).slice(0, 30);
+    if (!k) { box.hidden = true; return; }
+    if (!S.prodIdx) loadProdIdx().then(() => { if (document.activeElement === input && input.value.trim()) suggest(input, idx); });
+    sugTimer = setTimeout(() => {
+      const hits = searchItems(k);
       if (document.activeElement !== input) return;
-      if (!hits.length) { box.hidden = true; return; }
-      box.innerHTML = hits.map((h, j) => `<button type="button" data-h="${j}"><span>${esc(h.name)}<br><span class="sub num" style="font-size:11px">${esc(h.sku)} · ${esc(h.src)}</span></span><span class="num sub">${h.cost !== '' && h.cost != null ? '成本 ' + money(h.cost) : ''}</span></button>`).join('');
-      box.hidden = false;
-      placeSug(box, input);
-      box.onmousedown = e => {
-        const b = e.target.closest('[data-h]'); if (!b) return; e.preventDefault();
-        const h = hits[+b.dataset.h], it = S.draft.items[idx];
-        it.name = h.name; it.sku = h.sku;
+      const loading = !S.prodIdx ? '<div class="sug-note">商品主檔載入中，完整結果稍後出現…</div>' : '';
+      if (!hits.length) {
+        box.innerHTML = loading || `<div class="sug-note">找不到「${esc(k)}」。可試試只打品牌或部分品名，或直接輸入品名後自行填單價與成本</div>`;
+        box.hidden = false; placeSug(box, input); return;
+      }
+      box.innerHTML = hits.map((h, j) => `<button type="button" data-h="${j}" class="${j === 0 ? 'on' : ''}"><span class="sug-l"><b>${hilite(h.name, k)}</b><span class="sub">${[h.brand, h.spec].filter(Boolean).map(esc).join(' · ')}${h.brand || h.spec ? ' · ' : ''}<span class="num">${hilite(h.sku, k)}</span></span></span><span class="sug-r">${h.price ? `<span>售 ${money(h.price)}</span>` : ''}${h.cost !== '' && h.cost != null ? `<span class="sub">成本 ${money(h.cost)}</span>` : ''}<span class="tag t-${h.rank}">${h.src}</span></span></button>`).join('') + loading;
+      box.hidden = false; placeSug(box, input);
+      let cur = 0;
+      const pick = j => {
+        const h = hits[j], it = S.draft.items[idx];
+        it.name = h.name; it.sku = h.sku; it.costSource = '';
         if (h.cost !== '' && h.cost != null) { it.unitCost = n(h.cost); it.costSource = '成本：' + h.src; }
         it.priceSource = ''; if (h.price) { it.price = n(h.price); it.priceSource = '報價表標準價'; }
         applyLastPrice(it);
         const rule = milkRule(it.name); if (rule && !it.gift) { it.cans = n(it.qty) * n(rule.每箱罐數); it.autoCans = true; }
         box.hidden = true; viewCreate();
+        const q = document.querySelector(`[data-i="${idx}"][data-f="qty"]`); if (q) { q.focus(); q.select(); }
       };
-    }, 250);
+      const mark = j => { const bs = box.querySelectorAll('[data-h]'); bs.forEach(x => x.classList.remove('on')); cur = (j + bs.length) % bs.length; bs[cur].classList.add('on'); bs[cur].scrollIntoView({ block: 'nearest' }); };
+      box.onmousedown = e => { const b = e.target.closest('[data-h]'); if (!b) return; e.preventDefault(); pick(+b.dataset.h); };
+      input.onkeydown = e => {
+        if (box.hidden) return;
+        if (e.key === 'ArrowDown') { e.preventDefault(); mark(cur + 1); }
+        else if (e.key === 'ArrowUp') { e.preventDefault(); mark(cur - 1); }
+        else if (e.key === 'Enter' && !e.isComposing) { e.preventDefault(); pick(cur); }
+        else if (e.key === 'Escape') { box.hidden = true; }
+      };
+    }, 120);
     input.onblur = () => setTimeout(() => { box.hidden = true; }, 150);
   }
 

@@ -82,9 +82,18 @@ button{cursor:pointer}
 .items td:first-child input{text-align:left}
 .items td input:focus{border-color:var(--accent);background:#fff;outline:0}
 .items .del{border:0;background:none;color:var(--ink2);width:40px;height:40px;border-radius:12px}
-.suggest{position:fixed;z-index:40;background:#fff;border-radius:14px;box-shadow:0 8px 30px rgba(28,27,34,.12);max-height:280px;overflow:auto;min-width:340px}
-.suggest button{display:flex;justify-content:space-between;gap:12px;width:100%;border:0;background:none;padding:10px 14px;text-align:left;min-height:44px}
-.suggest button:hover{background:var(--tint)}
+.suggest{position:fixed;z-index:40;background:#fff;border-radius:14px;box-shadow:0 8px 30px rgba(28,27,34,.12);max-height:280px;overflow:auto;min-width:420px}
+.suggest button{display:flex;justify-content:space-between;align-items:center;gap:12px;width:100%;border:0;background:none;padding:10px 14px;text-align:left;min-height:48px;cursor:pointer}
+.suggest button:hover,.suggest button.on{background:var(--tint)}
+.suggest .sug-l{display:flex;flex-direction:column;gap:2px;min-width:0}
+.suggest .sug-l b{font-weight:600;font-size:14px}
+.suggest .sug-l .sub{font-size:11px}
+.suggest .sug-r{display:flex;flex-direction:column;align-items:flex-end;gap:2px;font-size:12px;white-space:nowrap}
+.suggest mark{background:#FFE7A8;color:inherit;border-radius:3px;padding:0 1px}
+.suggest .tag{font-size:10px;padding:1px 6px;border-radius:999px;background:#EEE;color:var(--ink2)}
+.suggest .tag.t-0{background:#E3F4E6;color:#1F6B2E}
+.suggest .tag.t-1{background:#E9E4FB;color:#4B3A9A}
+.sug-note{padding:12px 14px;font-size:12px;color:var(--ink2)}
 
 /* 報價表 */
 .pgrid{display:grid;grid-template-columns:repeat(auto-fill,minmax(220px,1fr));gap:14px}

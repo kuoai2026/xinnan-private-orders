@@ -42,6 +42,7 @@ function doPost(e) {
       logout: () => { CacheService.getScriptCache().remove('s_' + body.token); return {}; },
       bootstrap: () => bootstrap_(user),
       searchProducts: () => searchProducts_(body.keyword),
+      productIndex: () => productIndex_(),
       productImages: () => productImages_(),
       createOrder: () => withLock_(() => createOrder_(body.order, user)),
       shipOrder: () => withLock_(() => shipOrder_(body.shipment, user)),
@@ -260,6 +261,25 @@ function searchProducts_(keyword) {
     const text = Object.keys(rows[i]).filter(h => h !== '_row').map(h => rows[i][h]).join(' ').toLowerCase();
     if (words.every(w => text.indexOf(w) >= 0)) out.push(rows[i]);
   }
+  return out;
+}
+
+/**
+ * 建單用的精簡商品清單（貨號、品名、成本、品牌、規格），登入後一次下載，前端即時搜尋。
+ * 快取 10 分鐘，避免每次都讀 4,000 多列。
+ */
+function productIndex_() {
+  const cache = CacheService.getScriptCache();
+  const hit = cache.get('prodIdx');
+  if (hit) return JSON.parse(hit);
+  const t = readTable_(SHEETS.products);
+  const pick = re => t.headers.find(h => re.test(h)) || '';
+  const kSku = t.headers.indexOf('商品貨號') >= 0 ? '商品貨號' : pick(/貨號|編號|SKU/i);
+  const kName = pick(/商品名稱|品名|名稱/), kCost = pick(/成本/), kBrand = pick(/品牌|廠牌/), kSpec = pick(/規格|容量/);
+  const out = t.rows.map(r => [r[kSku] || '', r[kName] || '', kCost ? r[kCost] : '', kBrand ? r[kBrand] : '', kSpec ? r[kSpec] : ''])
+    .filter(x => x[0] || x[1]);
+  const json = JSON.stringify(out);
+  if (json.length < 95000) cache.put('prodIdx', json, 600);
   return out;
 }
 
